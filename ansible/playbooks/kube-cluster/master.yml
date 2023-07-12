@@ -1,0 +1,71 @@
+- name: Master cluster initialization
+  hosts: controlplane
+  become: true
+  tasks:
+    - name: Add KUBELET_EXTRA_ARGS
+      ansible.builtin.lineinfile:
+        path: /etc/default/kubelet
+        line: KUBELET_EXTRA_ARGS="--cgroup-driver=cgroupfs"
+        state: present
+        create: true
+        mode: '644'
+
+    - name: Add Environment in /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+      ansible.builtin.lineinfile:
+        path: /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+        line: Environment="KUBELET_EXTRA_ARGS=--fail-swap-on=false"
+        state: present
+        create: true
+        mode: '644'
+
+    - name: Docker daemon configuration
+      ansible.builtin.lineinfile:
+        path: /etc/docker/daemon.json
+        line: |
+          {
+            "exec-opts": ["native.cgroupdriver=systemd"],
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "100m"
+            },
+            "storage-driver": "overlay2"
+          }
+        state: present
+        create: true
+        mode: '644'
+
+    - name: Daemon reload
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart docker
+      ansible.builtin.service:
+        name: docker
+        state: restarted
+
+    - name: Restart kubelet
+      ansible.builtin.service:
+        name: kubelet
+        state: restarted
+
+    - name: Initialize the cluster
+      ansible.builtin.shell: kubeadm init --pod-network-cidr=192.168.0.0/16 >> cluster_initialized.txt
+      args:
+        chdir: $HOME
+        creates: cluster_initialized.txt
+
+    - name: Create .kube directory
+      become: true
+      become_user: ubuntu
+      ansible.builtin.file:
+        path: $HOME/.kube
+        state: directory
+        mode: '755'
+
+    - name: Copy admin.conf to user's kube config
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        mode: '644'
+        dest: /home/ubuntu/.kube/config
+        remote_src: true
+        owner: ubuntu
